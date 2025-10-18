@@ -1,201 +1,251 @@
-using System.Collections;
-using System.Collections.Generic;
-using JetBrains.Annotations;
-using UnityEditor.Rendering;
 using UnityEngine;
-using UnityEngine.VFX;
 
-public class CharacterVFX : MonoBehaviour{
-    public Animator animator;
-    public Transform model;
-    public KinematicCharacterController kcc;
-    
-    private WwiseSoundManager wwiseSoundManager;
+/// <summary>
+/// Manages all character-related visual effects, animation states, 
+/// model tilt, sound triggers, and tier-based visual feedback.
+/// </summary>
+public class CharacterVFX : MonoBehaviour
+{
+    [Header("Core References")]
+    [SerializeField, Tooltip("Animator controlling the character animations.")]
+    private Animator _animator;
 
-    public float maxSpeed = 150;
-    private bool onWater = true;
-    private bool isGrounded = false;
-    private bool isBroadlyGrounded = false;
-    private float speed = 0;
-    private float previousSpeed = 0;
-    private bool isGliding = false;
-    private Vector2 input = Vector2.zero;
-    private int tier = 0;
+    [SerializeField, Tooltip("Transform of the character's visible model, used for tilt effects.")]
+    private Transform _model;
 
-    // Animator Variables for Pausing
-    private float prevSpeed = 0;
+    [SerializeField, Tooltip("Reference to the character controller.")]
+    private KinematicCharacterController _kcc;
 
-    // PARTICLE SYSTEMS
+    private WwiseSoundManager _wwiseSoundManager;
+
+    [Header("General Settings")]
+    [SerializeField, Tooltip("Maximum speed used to scale tilt and effects.")]
+    private float _maxSpeed = 150f;
+
+    // ====== STATE VARIABLES ======
+    private bool _onWater;
+    private bool _isGrounded;
+    private bool _isBroadlyGrounded;
+    private bool _isGliding;
+    private float _speed;
+    private float _previousSpeed;
+    private Vector2 _input;
+    private int _tier;
+
+    // Animator pause handling
+    private float _previousAnimatorSpeed;
+
+    // ====== PARTICLE SYSTEMS ======
     [Header("Particle Systems")]
-    public ParticleController[] particleSystems;
+    [SerializeField, Tooltip("All attached particle systems for tier-based updates.")]
+    private ParticleController[] _particleSystems;
 
-    // SHOCKWAVE SOUND BARRIER THING
-    [Header("Shockwave")]
-    public Material shockwave;
-    public float speedToTriggerShock = 90f;
-    public float shockDuration = 1f;
-    private bool isShocking = false;
-    private float shockStart = -5f;
-    private float shockEnd = 1.5f;
-    public float shockElapsed = 0;
-    private bool shockSFXPlayed = true;
+    // ====== SHOCKWAVE EFFECT ======
+    [Header("Shockwave Effect")]
+    [SerializeField, Tooltip("Material controlling shockwave visuals.")]
+    private Material _shockwave;
 
-    // CHARACTER MODEL TILT
-    [Header("Model Tilt")]
-    public float maxTilt = 30f;
-    public float tiltIntensity = 1f;
-    public float tiltVelocityMultiplier = 1f;
-    
-    // SOUND FLAGS
-    private bool isWindSoundPlaying = false;
-    private bool isSplashPlaying = false;
+    [SerializeField, Tooltip("Speed threshold to trigger a shockwave burst.")]
+    private float _speedToTriggerShock = 90f;
 
+    [SerializeField, Tooltip("Duration of the shockwave effect.")]
+    private float _shockDuration = 1f;
 
-    private void Start(){
-        kcc = GetComponent<KinematicCharacterController>();
-        wwiseSoundManager = GameObject.FindObjectOfType<WwiseSoundManager>();
+    private bool _isShocking;
+    private float _shockStart = -5f;
+    private float _shockEnd = 1.5f;
+    private float _shockElapsed;
+    private bool _shockSfxPlayed = true;
+
+    // ====== MODEL TILT ======
+    [Header("Model Tilt Settings")]
+    [SerializeField, Tooltip("Maximum tilt angle of the model when turning.")]
+    private float _maxTilt = 30f;
+
+    [SerializeField, Tooltip("Tilt interpolation intensity.")]
+    private float _tiltIntensity = 1f;
+
+    [SerializeField, Tooltip("Multiplier affecting tilt velocity responsiveness.")]
+    private float _tiltVelocityMultiplier = 1f;
+
+    // ====== SOUND FLAGS ======
+    private bool _isWindSoundPlaying;
+    private bool _isSplashPlaying;
+
+    // ====== UNITY LIFECYCLE ======
+    private void Start()
+    {
+        if (_kcc == null)
+            _kcc = GetComponent<KinematicCharacterController>();
+
+        _wwiseSoundManager = FindObjectOfType<WwiseSoundManager>();
         UpdateTier(0);
     }
 
-    private void LateUpdate(){
+    private void LateUpdate()
+    {
+        if (_kcc == null) return;
+
         UpdateVariables();
-        SetAnimatorState();
-        UpdateModelRotation();
-        UpdateShock();
+        UpdateAnimatorState();
+        UpdateModelTilt();
+        UpdateShockwave();
     }
 
-    private void UpdateVariables(){
-        previousSpeed = speed;
+    // ====== VARIABLE SYNC ======
+    private void UpdateVariables()
+    {
+        _previousSpeed = _speed;
 
-        isGrounded = kcc.GetIsGrounded();
-        isBroadlyGrounded = kcc.GetIsBroadlyGrounded();
-        speed = kcc.GetSpeed();
-        isGliding = kcc.GetIsGliding();
-        onWater = kcc.GetIsOnWater();
-        input = kcc.GetInput();
+        _isGrounded = _kcc.IsGrounded;
+        _isBroadlyGrounded = _kcc.IsBroadlyGrounded;
+        _speed = _kcc.Speed;
+        _isGliding = _kcc.IsGliding;
+        _onWater = _kcc.IsOnWater;
+        _input = _kcc.InputVector;
 
-        if(!isGliding) StopGlide();
+        if (!_isGliding)
+            StopGlide();
     }
 
-    private void SetAnimatorState(){ 
-        animator.SetBool("TouchingGround", isBroadlyGrounded);
-        animator.SetFloat("Speed", speed);
-        animator.SetBool("IsGliding", isGliding);
+    // ====== ANIMATOR SYNC ======
+    private void UpdateAnimatorState()
+    {
+        if (_animator == null) return;
+
+        _animator.SetBool("TouchingGround", _isBroadlyGrounded);
+        _animator.SetFloat("Speed", _speed);
+        _animator.SetBool("IsGliding", _isGliding);
     }
 
-    private void UpdateModelRotation(){
-        float target = 0;
-        if(speed>80){
-            target = -input.x * maxTilt;
-        }
+    // ====== MODEL VISUAL TILT ======
+    private void UpdateModelTilt()
+    {
+        if (_model == null) return;
 
-        float lerpSpeed = tiltIntensity * Time.deltaTime;
+        float targetTilt = 0f;
+        if (_speed > 80f)
+            targetTilt = -_input.x * _maxTilt;
 
-        Quaternion tgt = Quaternion.Euler(model.localEulerAngles.x, model.localEulerAngles.y, target);
-        model.localRotation = Quaternion.Lerp(model.localRotation, tgt, lerpSpeed);
+        float lerpSpeed = _tiltIntensity * Time.deltaTime;
+        Quaternion targetRotation = Quaternion.Euler(_model.localEulerAngles.x, _model.localEulerAngles.y, targetTilt);
+        _model.localRotation = Quaternion.Lerp(_model.localRotation, targetRotation, lerpSpeed);
     }
 
-    public void UpdateTier(int _newTier){
-        if(tier<_newTier && _newTier>1) TriggerShock();
-        
-        tier = _newTier;
-        foreach(ParticleController pc in particleSystems){
-            pc.UpdateTier(tier);
-        }
-    }
+    // ====== TIER SYSTEM ======
+    public void UpdateTier(int newTier)
+    {
+        if (_tier < newTier && newTier > 1)
+            TriggerShockwave();
 
-    public void StartGlide(){
-        if(wwiseSoundManager) 
+        _tier = newTier;
+
+        if (_particleSystems == null) return;
+        foreach (ParticleController pc in _particleSystems)
         {
-            wwiseSoundManager.MusicStartGliding();
-            if (!isWindSoundPlaying) {
-                float pitchValue = CalculatePitch();
-                float lowPassValue = CalculateLowPass();
-                float highPassValue = CalculateHighPass();
-                wwiseSoundManager.PlayWindSound(pitchValue, lowPassValue, highPassValue);
-                isWindSoundPlaying = true;
-            }
+            if (pc != null)
+                pc.UpdateTier(_tier);
         }
     }
 
-    public void StopGlide(){
-        wwiseSoundManager.MusicStopGliding();
-    }
+    // ====== GLIDING SOUND & FX ======
+    public void StartGlide()
+    {
+        if (_wwiseSoundManager == null)
+            return;
 
-    private void TriggerShock(){
-        if(!isShocking){
-            isShocking = true;
-            shockSFXPlayed = false;
-            shockElapsed = 0;
+        _wwiseSoundManager.MusicStartGliding();
+
+        if (!_isWindSoundPlaying)
+        {
+            _wwiseSoundManager.PlayWindSound(CalculatePitch(), CalculateLowPass(), CalculateHighPass());
+            _isWindSoundPlaying = true;
         }
     }
 
-    private void UpdateShock(){
-        if(!isShocking) return;
-        shockElapsed += Time.deltaTime;
-        shockwave.SetFloat("_Progress", Mathf.Lerp(shockStart, shockEnd, shockElapsed/shockDuration));
-        
-        if(!shockSFXPlayed && (shockElapsed/shockDuration)>0.7f){
-            shockSFXPlayed = true;
-            if(wwiseSoundManager) wwiseSoundManager.PlaySoundWave();
+    public void StopGlide()
+    {
+        if (_wwiseSoundManager == null)
+            return;
+
+        _wwiseSoundManager.MusicStopGliding();
+        _isWindSoundPlaying = false;
+    }
+
+    // ====== SHOCKWAVE EFFECT ======
+    private void TriggerShockwave()
+    {
+        if (_isShocking) return;
+
+        _isShocking = true;
+        _shockSfxPlayed = false;
+        _shockElapsed = 0;
+    }
+
+    private void UpdateShockwave()
+    {
+        if (!_isShocking || _shockwave == null) return;
+
+        _shockElapsed += Time.deltaTime;
+        _shockwave.SetFloat("_Progress", Mathf.Lerp(_shockStart, _shockEnd, _shockElapsed / _shockDuration));
+
+        if (!_shockSfxPlayed && (_shockElapsed / _shockDuration) > 0.7f)
+        {
+            _shockSfxPlayed = true;
+            _wwiseSoundManager?.PlaySoundWave();
         }
 
-        if(shockElapsed > shockDuration)isShocking = false;
+        if (_shockElapsed > _shockDuration)
+            _isShocking = false;
     }
 
+    // ====== AUDIO PARAMS ======
+    private float CalculatePitch() => 10f;
+    private float CalculateHighPass() => 50f;
+    private float CalculateLowPass() => 20f;
 
-    //I suggest when player glides up, LowPass++; when player dives, low pass --, high pass ++, pitch ++
-    float CalculatePitch()
-    {
-        return 10f; 
-    }
-
-    float CalculateHighPass()
-    {
-        return 50f; 
-    }
-
-    float CalculateLowPass()
-    {
-        return 20f; 
-    }
-
+    // ====== SPLASH SOUNDS ======
     public void PlaySplashSound()
     {
-        if (onWater && !isSplashPlaying && wwiseSoundManager != null)
+        if (_onWater && !_isSplashPlaying && _wwiseSoundManager != null)
         {
-            wwiseSoundManager.PlaySplash(); 
-            isSplashPlaying = true;
+            _wwiseSoundManager.PlaySplash();
+            _isSplashPlaying = true;
         }
     }
 
     public void StopSplashSound()
     {
-        if (!onWater && isSplashPlaying && wwiseSoundManager != null)
+        if (!_onWater && _isSplashPlaying && _wwiseSoundManager != null)
         {
-            wwiseSoundManager.StopSplash(); 
-            isSplashPlaying = false;
+            _wwiseSoundManager.StopSplash();
+            _isSplashPlaying = false;
         }
     }
 
+    // ====== OTHER SOUNDS ======
     public void PlayFeather()
     {
-        wwiseSoundManager.PlayRandomFeather();
-    }
-
-    public void Pause(){
-        prevSpeed = animator.speed;
-        animator.speed = 0;
-    }
-
-    public void Unpause(){
-        animator.speed = prevSpeed;
+        _wwiseSoundManager?.PlayRandomFeather();
     }
 
     public void PlayJump()
     {
-        wwiseSoundManager.PlayJump();
+        _wwiseSoundManager?.PlayJump();
     }
 
-}
+    // ====== ANIMATOR CONTROL ======
+    public void Pause()
+    {
+        if (_animator == null) return;
 
+        _previousAnimatorSpeed = _animator.speed;
+        _animator.speed = 0f;
+    }
+
+    public void Unpause()
+    {
+        if (_animator == null) return;
+        _animator.speed = _previousAnimatorSpeed;
+    }
+}

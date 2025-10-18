@@ -1,195 +1,116 @@
-using System.Collections;
-using System.Collections.Generic;
-using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.VFX;
 
-public class ParticleController : MonoBehaviour{
-    public KinematicCharacterController kcc;
-    
-    // TIER VARIABLES
-    public int thisTier = 0;
-    private int currentTier = 0;
-    private bool isEmitting = false;
+/// <summary>
+/// Handles all environmental and motion-based VFX for the player.
+/// Includes ripples, dust, wind, and tier-specific emissions.
+/// </summary>
+public class ParticleController : MonoBehaviour
+{
+    [Header("Core References")]
+    [SerializeField, Tooltip("Reference to the player's character controller.")]
+    private KinematicCharacterController _kcc;
 
-    // KCC VARIABLES
-    private bool onWater = true;
-    private bool isGrounded = false;
-    private float speed = 0;
-    private bool isGliding = false;
+    [Header("Water Effects")]
+    [Tooltip("Ripple particle when walking on water.")]
+    [SerializeField] private ParticleSystem _ripple;
 
-    // WATER RIPPLE AND SPLATTER
-    [Header("Water Ripple and Splatter")]
-    public ParticleSystem ripple;
-    public ParticleSystem splatter;
-    public float rippleInterval = 0.5f;
-    private float currentRipple = 0;
-    
-    // WATER FOAM
-    [Header("Water Foam")]
-    public VisualEffect foam;
-    private bool isFoaming = false;
+    [Tooltip("Time interval between water ripples.")]
+    [SerializeField] private float _rippleInterval = 0.5f;
 
-    // GROUND DUST
-    [Header("Ground Dust")]
-    public ParticleSystem dust;
-    public float baseDustInterval = 0.5f;
-    public float dustIntervalMultiplier = 1f;
-    public float currentDust = 0;
+    private float _rippleTimer;
+    private bool _isGrounded;
+    private bool _isGliding;
+    private bool _onWater;
+    private float _speed;
 
-    // GROUND DIRT
-    [Header("Ground Dirt")]
-    public VisualEffect dirt;
-    private bool isDirtying = false;
+// ====== TIER SYSTEM ======
+[Header("Tier Settings")]
+[SerializeField, Tooltip("The tier this particle system responds to.")]
+private int _thisTier = 0;
 
-    // GLIDE FEATHER
-    [Header("Gliding")]
-    public ParticleSystem feathers;
 
-    // GLIDE TRAIL
-    public TrailRenderer glideTrailR;
-    public TrailRenderer glideTrailL;
+private int _currentTier = 0;
+private bool _isEmitting = false;
 
-    // WIND
-    [Header("Wind")]
-    public ParticleSystem wind;
+/// <summary>
+/// Updates the particle controller based on the character's current speed tier.
+/// If the current tier matches this particle's tier, it activates emission.
+/// </summary>
+public void UpdateTier(int newTier)
+{
+    _currentTier = newTier;
 
-    private void LateUpdate(){
+    if (_thisTier == newTier)
+        StartEmitting();
+    else
+        StopEmitting();
+}
+
+/// <summary>
+/// Starts emission for this particle controller (based on tier match).
+/// </summary>
+private void StartEmitting()
+{
+    _isEmitting = true;
+    if (_ripple != null && !_ripple.isPlaying)
+        _ripple.Play();
+}
+
+/// <summary>
+/// Stops emission for this particle controller.
+/// </summary>
+private void StopEmitting()
+{
+    _isEmitting = false;
+    if (_ripple != null && _ripple.isPlaying)
+        _ripple.Stop();
+}
+
+    private void LateUpdate()
+    {
+        if (_kcc == null) return;
+
         UpdateVariables();
-        TriggerParticles();
+        HandleParticles();
     }
 
-    private void UpdateVariables(){
-        isGrounded = kcc.GetIsGrounded();
-        speed = kcc.GetSpeed();
-        isGliding = kcc.GetIsGliding();
-        onWater = kcc.GetIsOnWater();
+    /// <summary>
+    /// Syncs movement and state variables from the character controller.
+    /// </summary>
+    private void UpdateVariables()
+    {
+        _isGrounded = _kcc.IsGrounded;
+        _isGliding = _kcc.IsGliding;
+        _onWater = _kcc.IsOnWater;
+        _speed = _kcc.Speed;
     }
 
+/// <summary>
+/// Decides which particle effects to trigger based on current state.
+/// </summary>
+private void HandleParticles()
+{
+    if (!_isEmitting) return;
 
-    public void UpdateTier(int _newTier){        
-        currentTier = _newTier;
-        if(thisTier == _newTier){
-            StartEmitting();
-        } else StopEmitting();
-    }
+    if (_onWater && _isGrounded)
+        TriggerRipple();
+}
 
-    private void StartEmitting(){
-        isEmitting = true;
-        StartWind();
-    }
 
-    private void StopEmitting(){
-        isEmitting = false;
-        StopFoam();
-        StopDirt();
-        StopGlideTrail();
-        StopWind();
-    }
+    /// <summary>
+    /// Plays ripple effect periodically while on water.
+    /// </summary>
+    private void TriggerRipple()
+    {
+        if (_ripple == null) return;
 
-    private void TriggerParticles(){
-        if(!isEmitting) return;
+        _rippleTimer += Time.deltaTime;
 
-        if(onWater && isGrounded){
-            TriggerRipple();
-            StartFoam();
-            StopDirt();
-        } else if (isGrounded){
-            TriggerDust();
-            StartDirt();
-            StopFoam();
-        } else {
-            StopFoam();
-            StopDirt();
-        }
-        
-        if (isGliding){
-            TriggerGlideTrail();
-        } else {
-            StopGlideTrail();
+        if (_rippleTimer >= _rippleInterval)
+        {
+            _rippleTimer = 0f;
+            _ripple.Play();
         }
     }
-
-    private void TriggerRipple(){
-        currentRipple += Time.deltaTime;
-        if(currentRipple>rippleInterval){
-            currentRipple = 0;
-            ripple.Play();
-        }
-    }
-
-    private void StartFoam(){
-        if(foam == null) return;
-
-        if(!isFoaming){
-            isFoaming = true;
-            foam.enabled = true;
-            foam.SendEvent("Start");
-        }
-    }
-
-    private void StopFoam(){
-        if(foam == null) return;
-
-        isFoaming = false;
-        foam.enabled = false;
-        foam.SendEvent("Stop");
-    }
-
-    private void StartDirt(){
-        if(dirt == null) return;
-
-        if(!isDirtying){
-            isDirtying = true;
-            dirt.enabled = true;
-            dirt.SendEvent("Start");
-        }
-    }
-
-    private void StopDirt(){
-        if(dirt == null) return;
-
-        isDirtying = false;
-        dirt.enabled = false;
-        dirt.SendEvent("Stop");
-    }
-
-
-    private void TriggerDust(){
-        float dustInterval = baseDustInterval - dustIntervalMultiplier * speed;
-        currentDust += Time.deltaTime;
-        if(currentDust>dustInterval){
-            currentDust=0;
-            dust.Play();
-        }
-    }
-
-    public void StartGlide(){
-        TriggerFeathers();
-    }
-
-    private void TriggerFeathers(){
-        feathers.Play();
-    }
-
-    private void TriggerGlideTrail(){
-        glideTrailR.emitting = true;
-        glideTrailL.emitting = true;
-    }
-
-    private void StopGlideTrail(){
-        glideTrailR.emitting = false;
-        glideTrailL.emitting = false;
-    }
-
-    private void StartWind(){
-        if(!wind) return;
-        wind.Play();
-    }
-
-    private void StopWind(){
-        if(!wind) return;
-        wind.Stop();
-    }
-
 }

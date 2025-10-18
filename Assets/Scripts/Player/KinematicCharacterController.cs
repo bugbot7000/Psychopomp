@@ -1,435 +1,354 @@
 using System.Collections;
-using System.Collections.Generic;
-using Unity.VisualScripting;
 using UnityEngine;
-using UnityEngine.InputSystem;
-using UnityEngine.SocialPlatforms;
 
-public class KinematicCharacterController : MonoBehaviour{
-    // ===== MOVEMENT ROTATION =====
-    [Header("Movement Rotation")]
-    public float rotationStrength = 1f;
-    public float yzRotationStrength = 100f;
-    public float yzUpRotationSpeed = 100f;
-    public float yzDownRotationSpeed = 100f;
-    public float yzReturnRotationSpeed = 100f;
-    public float maxYZRotationAngle = 60f;
+/// <summary>
+/// Controls player movement, rotation, jumping, gliding, and environmental interaction.
+/// Handles velocity, gravity, coyote time, jump buffering, and tier-based speed control.
+/// </summary>
+public class KinematicCharacterController : MonoBehaviour
+{
+    // ====== ROTATION SETTINGS ======
+    [Header("Rotation Settings")]
+    [SerializeField, Tooltip("Rotation speed for turning around the Y-axis.")]
+    private float _rotationStrength = 1f;
+    [SerializeField, Tooltip("Strength of pitch rotation while gliding.")]
+    private float _yzRotationStrength = 100f;
+    [SerializeField, Tooltip("Speed of upward pitch adjustment while gliding.")]
+    private float _yzUpRotationSpeed = 100f;
+    [SerializeField, Tooltip("Speed of downward pitch adjustment while gliding.")]
+    private float _yzDownRotationSpeed = 100f;
+    [SerializeField, Tooltip("Speed at which pitch returns to neutral.")]
+    private float _yzReturnRotationSpeed = 100f;
+    [SerializeField, Tooltip("Maximum allowed pitch angle while gliding.")]
+    private float _maxYZRotationAngle = 60f;
 
-    // ==== GENERAL ======
-    private Vector2 input = Vector2.zero;
-    private Vector3 currentNormal = Vector3.zero;
-    private string currentGroundTag = null; 
-    private Vector3 forwardVector = Vector3.zero;
+    // ====== MOVEMENT SETTINGS ======
+    [Header("Movement Settings")]
+    [SerializeField] private float _maxSpeed = 100f;
+    [SerializeField] private float[] _speedTiers = { 50f, 100f, 150f, 200f };
+    [SerializeField] private float _absoluteMaxSpeed = 250f;
+    [SerializeField] private float _minSpeed = 10f;
+    [SerializeField] private float _acceleration = 10f;
+    [SerializeField] private float _deceleration = 40f;
+    [SerializeField] private float _passiveDeceleration = 10f;
+    [SerializeField] private float _rampMagnitudeMultiplier = 1.05f;
 
-    // ===== MOVEMENT ACCELERATION =====
-    [Header("Movement Acceleration")]
-    public float maxSpeed = 100f;
-    public float[] speedTiers = new float[4]{50f, 100f, 150f, 200f};
-    public float absoluteMaxSpeed = 250f;
-    public float minSpeed = 10f;
-    public float acceleration = 10f;
-    public float deceleration = 40f;
-    public float passiveDeceleration = 10f;
-    public float rampMagnitudeMultiplier = 1.05f;
-    private bool isUpdatingTier = false;
+    // ====== FALLING SETTINGS ======
+    [Header("Falling Settings")]
+    [SerializeField] private float _gravity = 10f;
+    [SerializeField] private float _fallGravityMultiplier = 1.5f;
+    [SerializeField] private float _maxFallSpeed = 100f;
 
-    // ===== MOVEMENT VELOCITY VARIABLES =====
-    [Header("Current Velocity")]
-    public Vector3 currentVelocity = Vector3.zero;
-    public float velMagnitude = 0;
-    public float effectiveVelMagnitude = 0;
-    public int currentTier = 0;
+    // ====== JUMP SETTINGS ======
+    [Header("Jump Settings")]
+    [SerializeField, Tooltip("Initial upward velocity when jumping.")]
+    private float _jumpVelocity = 10f;
+    [SerializeField, Tooltip("Maximum number of allowed jumps (e.g., double jump).")]
+    private int _maxJumpCount = 2;
+    [SerializeField, Tooltip("Grace period after leaving the ground during which a jump is still allowed.")]
+    private float _coyoteTime = 0.2f;
+    [SerializeField, Tooltip("Time window to buffer a jump before landing.")]
+    private float _jumpBufferTime = 0.1f;
 
-    // ===== FALLING =====
-    [Header("Falling")]
-    public float gravity = 10f;
-    public float fallGravityMultiplier = 1.5f; 
-    public float acceleratedFallMultiplier = 5f;
-    public float maxFallSpeed = 100f;
-    private bool isGrounded = false;
-    private bool isBroadlyGrounded = false;
-    public float fallingVelocity = 0;
+    // ====== GLIDE SETTINGS ======
+    [Header("Glide Settings")]
+    [SerializeField] private float _glideTimeLimit = 4f;
+    [SerializeField] private float _glideGravityFactor = 0.1f;
+    [SerializeField] private float _glideMaxFallSpeed = 10f;
+    [SerializeField] private float _freezeFrameDuration = 0.1f;
+    [SerializeField] private float _glideDeceleration = 20f;
+    [SerializeField] private float _glideAcceleration = 20f;
 
-    // ===== JUMPING =====
-    [Header("Jumping")]
-    public float jumpVelocity = 1f;
-    public int maxJumpCount = 2;
-    public float coyoteTime = 0.2f;
-    public float jumpBufferTime = 0.1f;
-    private bool isJumping = false;
-    private float currentCoyote = 0;
-    private float currentJumpBuffer = 0;
-    private int currentJumpCount = 0;
+    // ====== STATE VARIABLES ======
+    private Vector2 _input;
+    private Vector3 _currentNormal;
+    private string _currentGroundTag;
+    private Vector3 _forwardVector;
+    private Vector3 _currentVelocity;
+    private float _velocityMagnitude;
+    private float _effectiveVelocityMagnitude;
+    private int _currentTier;
 
-    // ===== GLIDING =====
-    [Header("Gliding")]
-    public float glideTimeLimit = 4f;
-    public float glideGravityFactor = 0.1f;
-    public float glideMaxFallSpeed = 10f;
-    public float freezeFrameDuration = 0.1f;
-    public float glideDeceleration = 20f;
-    public float glideAcceleration = 20f;
-    private bool isGliding = false;
-    private bool isFrozen = false;
-    private float glideTimer = 0f;
+    private bool _isGrounded;
+    private bool _wasGrounded;
+    private bool _isBroadlyGrounded;
+    private bool _isJumping;
+    private bool _isGliding;
+    private bool _isFrozen;
 
-    // ===== COMPONENT REFERENCES =====
-    public WwiseSoundManager wwiseSoundManager;
-    public CameraController cameraController;
-    private ColliderUtil colUtil;
-    private CharacterVFX vfx;
+    private float _fallingVelocity;
+    private float _currentCoyote;
+    private float _currentJumpBuffer;
+    private int _currentJumpCount;
+    private float _glideTimer;
 
-    void Start(){
-        colUtil = GetComponent<ColliderUtil>();
-        vfx = GetComponent<CharacterVFX>();
+    // ====== COMPONENT REFERENCES ======
+    private ColliderUtil _colliderUtil;
+    private CharacterVFX _vfx;
+    [SerializeField] private WwiseSoundManager _wwiseSoundManager;
+    [SerializeField] private CameraController _cameraController;
+
+    // ====== UNITY LIFECYCLE ======
+    private void Start()
+    {
+        _colliderUtil = GetComponent<ColliderUtil>();
+        _vfx = GetComponent<CharacterVFX>();
     }
 
-    void Update(){
-        // Checks if is paused
-        if(isFrozen) return;
+    private void Update()
+    {
+        if (_isFrozen) return;
 
-        // Get input from WASD and mouse
-        input = new Vector3(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical")).normalized;
-
-        // Calculate XZ rotation for turning and YZ for gliding
-        transform.Rotate(Vector3.up * input.x * rotationStrength * Time.deltaTime, Space.World);
-        ApplyYZRotation(input);
-
-        // Calculate current speed based on tiered system, applies speed forward
-        velMagnitude = CalculateCurrentVelocityMagnitude(input.y);
-        if(isGliding) velMagnitude = CalculateGlidingAcceleration(velMagnitude);
-        UpdateCurrentTier(effectiveVelMagnitude, velMagnitude);
-        effectiveVelMagnitude = CalculateEffectiveVelocityMagnitude(velMagnitude, currentTier);
-        forwardVector = GetForwardVector();
-        Vector3 newVelocity = effectiveVelMagnitude * GetForwardVectorMultiplier(forwardVector) * forwardVector;
-
-        // Check if grounded, and keeping track of coyote time timer to allow for delayed jumps
-        isGrounded = CheckGrounded();
-        isBroadlyGrounded = CheckBroadlyGrounded();
-        if(isGrounded){
-            isJumping=false;
-            isGliding=false;
-            currentJumpCount = 0;
-            currentCoyote = coyoteTime;
-            glideTimer = 0;
-            vfx.PlaySplashSound();
-        } else {currentCoyote -= Time.deltaTime;
-        vfx.StopSplashSound();
-        }
-
-        // Jumping from air
-        if(isJumping && currentJumpCount < maxJumpCount && Input.GetButtonDown("Jump")){
-            vfx.PlayJump();
-            fallingVelocity += CalculateJumpVelocity();
-            currentJumpBuffer = 0;
-            currentJumpCount++;
-        }
-
-        // Check for jump to buffer inputs. Allows for antecipated jumps, buffering a jump before the player actually hits the floor
-        if(Input.GetButtonDown("Jump")){
-            currentJumpBuffer = jumpBufferTime;
-        } else currentJumpBuffer -= Time.deltaTime;
-
-        // Jumping from the ground
-        if(currentCoyote > 0 && currentJumpBuffer > 0){
-            isJumping = true;
-            vfx.PlayJump();
-            currentCoyote = 0;
-            currentJumpBuffer = 0;
-            currentJumpCount = 1;
-            fallingVelocity += CalculateJumpVelocity();
-        }
-
-        // Check to see if is grounded. If not, fall
-        if(!isGrounded){
-            fallingVelocity = CalculateFallingVelocity();
-        }
-
-        // Check for gliding
-        if(!isGrounded && !isGliding && GetGlideInput() && glideTimer < glideTimeLimit && velMagnitude > 15){
-            isGliding = true;
-            vfx.PlayFeather();
-            vfx.StartGlide();
-            FreezeFrame();
-        } else if(!GetGlideInput()){
-            isGliding = false;
-            vfx.StopGlide();
-        }
-
-        // Limit gliding by glide time limit
-        if(isGliding){
-            glideTimer += Time.deltaTime;
-            if(glideTimer > glideTimeLimit){
-                isGliding = false;
-                vfx.StopGlide();
-            }
-            if(velMagnitude < 15){
-                isGliding = false;
-                vfx.StopGlide();
-            }
-        }
-
-        // Updating and clamping velocity
-        newVelocity.y += fallingVelocity;
-
-        // Check for collision and slides across the collided surface if it happens
-        Vector3 attemptedMovement = ((newVelocity+currentVelocity)/2) * Time.deltaTime;
-        Vector3 newMovement = colUtil.CollideAndSlide(attemptedMovement, transform.position, 1, GetRampMultiplier());
-
-        // Extra check to avoid falling through ground
-        // TODO: Remove -normal actualy !!!!
-        if(isGrounded) newMovement = SnapToGround(newMovement);
-        if(isGrounded && fallingVelocity <= 0) fallingVelocity = 0;
-
-        // Doing the character translation
-        transform.position += newMovement;
-        currentVelocity =  newMovement/Time.deltaTime;
+        HandleInput();
+        HandleRotation();
+        HandleGroundChecks();
+        HandleJumping();
+        HandleGliding();
+        HandleMovement();
+        ApplyFinalMovement();
     }
 
-    private float CalculateCurrentVelocityMagnitude(float input){
-        float acc = 0;
-        float dec = 0;
-        float max = maxSpeed;
-
-        if(!isGrounded){
-            acc = 0;
-        } else if(input>0){
-            acc = acceleration;
-        } else if(input<0){
-            dec = deceleration;
-        } else dec = passiveDeceleration;
-    
-        float baseVel = Mathf.Clamp(velMagnitude+(acc*Time.deltaTime), minSpeed, max);
-        float vel = Mathf.Max(baseVel, velMagnitude);
-        vel -= (dec*Time.deltaTime);
-
-        vel = Mathf.Min(vel, absoluteMaxSpeed);
-        return vel;
-    }
-    
-    private float CalculateEffectiveVelocityMagnitude(float _vel, int _tier){
-        // if(isGliding) return _vel;  
-        float maxVel = speedTiers[_tier];
- 
-        // return _vel;
-        return Mathf.Min(maxVel, _vel);
+    // ====== INPUT ======
+    private void HandleInput()
+    {
+        _input = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical")).normalized;
     }
 
-    private void UpdateCurrentTier(float lastEffective, float currentVel){
-        if(!isGrounded) return;
-        
-        int a = 0;
-        int b = 0;
+    // ====== ROTATION ======
+    private void HandleRotation()
+    {
+        transform.Rotate(Vector3.up * _input.x * _rotationStrength * Time.deltaTime, Space.World);
+        ApplyYZRotation(_input);
+    }
 
-        for(int i=0; i<speedTiers.Length; i++){
-            if(speedTiers[i] < lastEffective) a = i+1;
-            if(speedTiers[i] < currentVel) b = i;  
+    private void ApplyYZRotation(Vector2 input)
+    {
+        Quaternion target = Quaternion.Euler(0, transform.localEulerAngles.y, 0);
+        float speed = _yzReturnRotationSpeed;
+
+        if (_isGliding)
+        {
+            speed = input.y > 0 ? _yzDownRotationSpeed : _yzUpRotationSpeed;
+            float xRot = transform.eulerAngles.x + _yzRotationStrength * input.y * Time.deltaTime;
+            xRot = ClampAngle(xRot, -_maxYZRotationAngle, _maxYZRotationAngle);
+            target = Quaternion.Euler(xRot, transform.localEulerAngles.y, 0f);
         }
 
-        int tier = Mathf.Max(a, b);
-        tier = Mathf.Clamp(tier,0,speedTiers.Length-1);
-
-        if(currentTier != tier && !isUpdatingTier){
-            isUpdatingTier = true;
-            StartCoroutine(TriggerTierUpdate(tier));
-        }
-    }
-
-    private IEnumerator TriggerTierUpdate(int _tier){
-        if(_tier > 1){
-            yield return new WaitForSeconds(0.25f);
-        } else yield return new WaitForSeconds(0);
-        
-        isUpdatingTier = false;
-        currentTier = _tier;
-        vfx.UpdateTier(_tier);
-        cameraController.UpdateTier(_tier);
-    }
-
-    private void ApplyYZRotation(Vector2 input){
-        Quaternion target = Quaternion.Euler(new Vector3(0,transform.localEulerAngles.y,0));
-        float speed = yzReturnRotationSpeed;
-
-        if(isGliding){
-            if(input.y > 0){
-                speed = yzDownRotationSpeed;
-            } else speed = yzUpRotationSpeed;
-
-            float xNorm = transform.eulerAngles.x + (yzRotationStrength * input.y * Time.deltaTime);
-            float xAngle = ClampAngle(xNorm, -maxYZRotationAngle, maxYZRotationAngle);
-            target = Quaternion.Euler(new Vector3(xAngle, transform.localEulerAngles.y, 0f));
-        }
-        
         transform.rotation = Quaternion.Slerp(transform.rotation, target, speed * Time.deltaTime);
     }
 
-    private float ClampAngle(float current, float min, float max){
+    // ====== GROUND CHECKS ======
+    private void HandleGroundChecks()
+    {
+        _wasGrounded = _isGrounded;
+        _isGrounded = _colliderUtil.IsGroundedCast(transform.position, out _currentNormal, out _currentGroundTag);
+        _isBroadlyGrounded = _colliderUtil.BroaderIsGroundedCast(transform.position);
+
+        if (_isGrounded)
+        {
+            _currentCoyote = _coyoteTime;
+            _isJumping = false;
+            _isGliding = false;
+            _currentJumpCount = 0;
+            _glideTimer = 0;
+            _fallingVelocity = 0;
+            _vfx.PlaySplashSound();
+        }
+        else
+        {
+            _currentCoyote -= Time.deltaTime;
+            _vfx.StopSplashSound();
+            _fallingVelocity = CalculateFallingVelocity();
+        }
+    }
+
+    // ====== JUMPING ======
+    private void HandleJumping()
+    {
+        if (Input.GetButtonDown("Jump"))
+            _currentJumpBuffer = _jumpBufferTime;
+        else
+            _currentJumpBuffer -= Time.deltaTime;
+
+        bool canGroundJump = _currentCoyote > 0f && _currentJumpBuffer > 0f;
+        bool canAirJump = _isJumping && _currentJumpCount < _maxJumpCount && Input.GetButtonDown("Jump");
+
+        if (canGroundJump || canAirJump)
+            ExecuteJump();
+    }
+
+    private void ExecuteJump()
+    {
+        _isJumping = true;
+        _vfx.PlayJump();
+        _currentJumpBuffer = 0;
+        _currentCoyote = 0;
+        _currentJumpCount++;
+        _fallingVelocity = _jumpVelocity;
+    }
+
+    // ====== GLIDING ======
+    private void HandleGliding()
+    {
+        bool glideInput = Input.GetButton("Glide") || Input.GetAxis("Glide") > 0;
+
+        if (!_isGrounded && glideInput && !_isGliding && _glideTimer < _glideTimeLimit && _velocityMagnitude > 15f)
+            StartGlide();
+        else if (!glideInput || _glideTimer >= _glideTimeLimit || _velocityMagnitude < 15f)
+            StopGlide();
+
+        if (_isGliding) _glideTimer += Time.deltaTime;
+    }
+
+    private void StartGlide()
+    {
+        _isGliding = true;
+        _vfx.PlayFeather();
+        _vfx.StartGlide();
+        FreezeFrame();
+    }
+
+    private void StopGlide()
+    {
+        if (!_isGliding) return;
+        _isGliding = false;
+        _vfx.StopGlide();
+    }
+
+    // ====== MOVEMENT ======
+    private void HandleMovement()
+    {
+        _velocityMagnitude = CalculateCurrentVelocityMagnitude(_input.y);
+        if (_isGliding) _velocityMagnitude = CalculateGlidingAcceleration(_velocityMagnitude);
+
+        _effectiveVelocityMagnitude = Mathf.Min(_speedTiers[_currentTier], _velocityMagnitude);
+        _forwardVector = GetForwardVector();
+        Vector3 moveDir = _forwardVector * GetForwardVectorMultiplier(_forwardVector);
+        Vector3 newVelocity = _effectiveVelocityMagnitude * moveDir;
+        newVelocity.y += _fallingVelocity;
+        _currentVelocity = newVelocity;
+    }
+
+    private float CalculateCurrentVelocityMagnitude(float inputY)
+    {
+        if (!_isGrounded) return _velocityMagnitude;
+
+        float acc = 0f;
+        float dec = 0f;
+
+        if (inputY > 0) acc = _acceleration;
+        else if (inputY < 0) dec = _deceleration;
+        else dec = _passiveDeceleration;
+
+        float vel = _velocityMagnitude + (acc - dec) * Time.deltaTime;
+        return Mathf.Clamp(vel, _minSpeed, _absoluteMaxSpeed);
+    }
+
+    private Vector3 GetForwardVector()
+    {
+        Vector3 fwd = transform.forward;
+        if (_isGrounded) fwd.y = 0;
+        return fwd.normalized;
+    }
+
+    private float GetForwardVectorMultiplier(Vector3 fwd)
+    {
+        if (!_isGliding) return 1f;
+        float y = fwd.y;
+        return y > 0f ? 1f : (Mathf.Abs(y) * 1.5f) + 1f;
+    }
+
+    private float CalculateFallingVelocity()
+    {
+        float grav = _gravity * (_fallingVelocity < 0 ? _fallGravityMultiplier : 1);
+        float max = _isGliding ? _glideMaxFallSpeed : _maxFallSpeed;
+        float factor = _isGliding ? _glideGravityFactor : 1;
+
+        return Mathf.Max(_fallingVelocity - grav * factor * Time.deltaTime, -max);
+    }
+/// <summary>
+/// Adjusts horizontal velocity based on pitch angle while gliding.
+/// Diving increases speed, climbing slows you down.
+/// </summary>
+private float CalculateGlidingAcceleration(float currentVelocity)
+{
+    // Get local X rotation (convert from 0–360 to -180–180)
+    float xAngle = transform.localEulerAngles.x;
+    if (xAngle > 180f)
+        xAngle -= 360f;
+
+    // Normalize angle to ratio (-1 to 1)
+    float angleRatio = Mathf.Clamp(xAngle / _maxYZRotationAngle, -1f, 1f);
+    float newVelocity;
+
+    if (angleRatio > 0f)
+    {
+        // Diving → accelerate
+        newVelocity = currentVelocity + (angleRatio * _glideAcceleration * Time.deltaTime);
+    }
+    else
+    {
+        // Climbing → decelerate
+        newVelocity = currentVelocity + (angleRatio * _glideDeceleration * Time.deltaTime);
+    }
+
+    return Mathf.Clamp(newVelocity, _minSpeed, _absoluteMaxSpeed);
+}
+    private void ApplyFinalMovement()
+    {
+        Vector3 moveAttempt = _currentVelocity * Time.deltaTime;
+        Vector3 finalMove = _colliderUtil.CollideAndSlide(moveAttempt, transform.position, 1, GetRampMultiplier());
+        if (_isGrounded) finalMove = SnapToGround(finalMove);
+
+        transform.position += finalMove;
+        _currentVelocity = finalMove / Time.deltaTime;
+    }
+
+    // ====== HELPERS ======
+    private float ClampAngle(float current, float min, float max)
+    {
         float dtAngle = Mathf.Abs(((min - max) + 180) % 360 - 180);
-        float hdtAngle = dtAngle * 0.5f;
-        float midAngle = min + hdtAngle;
-    
-        float offset = Mathf.Abs(Mathf.DeltaAngle(current, midAngle)) - hdtAngle;
+        float halfAngle = dtAngle * 0.5f;
+        float midAngle = min + halfAngle;
+        float offset = Mathf.Abs(Mathf.DeltaAngle(current, midAngle)) - halfAngle;
+
         if (offset > 0)
             current = Mathf.MoveTowardsAngle(current, midAngle, offset);
+
         return current;
     }
 
-    private Vector3 GetForwardVector(){
-        Vector3 forward = transform.forward;
-        if(isGrounded){
-            forward.y = 0f;
-            return forward.normalized;
-        }
-
-        return forward;
+    private float GetRampMultiplier()
+    {
+        float dot = Vector3.Dot(Vector3.up, _currentNormal);
+        return (dot < 0.95f && dot > 0.05f) ? _rampMagnitudeMultiplier : 1f;
     }
 
-    private float GetForwardVectorMultiplier(Vector3 fwd){
-        if(!isGliding) return 1f;
-
-        float yaxis = fwd.normalized.y;
-        if(yaxis > 0f) return 1f;
-
-        // The lower the angle, the faster the gliding is.
-        // Gliding angle * extra sauce multiplier + 1 (base)
-        return (Mathf.Abs(yaxis)*1.5f)+1f;      
+    private Vector3 SnapToGround(Vector3 move)
+    {
+        move.y = Mathf.Max(0, move.y);
+        return move;
     }
 
-    private float CalculateFallingVelocity(){
-        float verticalVelocity = 0;
-        float gravFactor = 1;
-        float max = maxFallSpeed;
-
-        if(fallingVelocity<0) gravFactor = fallGravityMultiplier;
-        
-        if(isGliding){
-            gravFactor = glideGravityFactor;
-            max = glideMaxFallSpeed;
-        }
-        
-        verticalVelocity = Mathf.Max(fallingVelocity - (gravity * gravFactor * Time.deltaTime), -max);
-        
-        return verticalVelocity;
-    }
-
-    private float CalculateJumpVelocity(){
-        float verticalVelocity = 0f;
-        verticalVelocity = jumpVelocity;
-        // the bigger the y velocity the higher the jump
-
-        return verticalVelocity;
-    }
-
-
-    private float CalculateGlidingAcceleration(float _velMag){
-        float ang = transform.localEulerAngles.x;
-        if(ang > 270) ang -= 360;
-
-        float angleRatio = ang / maxYZRotationAngle;
-        float unclamped = 0;
-
-        // If player is diving, else if is rising
-        if(angleRatio > 0){
-            unclamped = _velMag + (angleRatio * glideAcceleration * Time.deltaTime);
-        } else {
-            unclamped = _velMag + (angleRatio * glideDeceleration * Time.deltaTime);
-        }
-        
-        return Mathf.Clamp(unclamped, minSpeed, absoluteMaxSpeed);
-    }
-
-    private bool CheckGrounded(){
-        Vector3 normal;
-        string tag;
-        bool grd = colUtil.IsGroundedCast(transform.position, out normal, out tag);
-        currentNormal = normal;
-        currentGroundTag = tag;
-
-        return grd;
-    }
-
-    private bool CheckBroadlyGrounded(){
-        return colUtil.BroaderIsGroundedCast(transform.position);
-    }
-
-    private float GetRampMultiplier(){
-        float dot = Vector3.Dot(Vector3.up, currentNormal);
-        
-        if(dot < .95f && dot > .05f){
-            return rampMagnitudeMultiplier;
-        }
-
-        return 1;
-    }
-
-    private Vector3 SnapToGround(Vector3 _mov){
-        Vector3 mov = _mov;
-        mov.y = Mathf.Max(0, mov.y);
-        return mov;
-    }
-
-    private void FreezeFrame(){
-        isFrozen = true;
+    private void FreezeFrame()
+    {
+        _isFrozen = true;
         StartCoroutine(UnfreezeFrame());
     }
 
-    private IEnumerator UnfreezeFrame(){
-        yield return new WaitForSecondsRealtime(freezeFrameDuration);
-        isFrozen = false;
+    private IEnumerator UnfreezeFrame()
+    {
+        yield return new WaitForSecondsRealtime(_freezeFrameDuration);
+        _isFrozen = false;
     }
 
-    private bool GetGlideInput(){
-        if(isBroadlyGrounded) return false;
-
-        if(Input.GetButton("Glide")) return true;
-
-        else if(Input.GetAxis("Glide") > 0) return true;
-
-        return false;
-    }
-
-    public Vector2 GetInput(){
-        return input;
-    }
-
-    public int GetTier(){
-        return currentTier;
-    }
-    
-    public bool GetIsGrounded(){
-        return isGrounded;
-    }
-
-    public bool GetIsBroadlyGrounded(){
-        return isBroadlyGrounded;
-    }
-
-    public bool GetIsGliding(){
-        return isGliding;
-    }
-
-    public float GetSpeed(){
-        return velMagnitude;
-    }
-
-    public bool GetIsOnWater(){
-        if(currentGroundTag == "Water") return true;
-        return false;
-    }
-
-    public Vector3 GetCurrentForwardVector(){
-        return forwardVector;
-    }
-
-    public void Pause(){
-        isFrozen = true;
-        vfx.Pause();
-        cameraController.Pause();
-    }
-
-    public void Unpause(){
-        isFrozen = false;
-        vfx.Unpause();
-        cameraController.Unpause();
-    }
+    // ====== PUBLIC ACCESSORS ======
+    public bool IsGrounded => _isGrounded;
+    public bool IsBroadlyGrounded => _isBroadlyGrounded;
+    public bool IsGliding => _isGliding;
+    public bool IsOnWater => _currentGroundTag == "Water";
+    public float Speed => _velocityMagnitude;
+    public Vector2 InputVector => _input;
+    public int Tier => _currentTier;
+    public Vector3 ForwardVector => _forwardVector;
 }
